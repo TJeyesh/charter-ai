@@ -16,12 +16,15 @@ export default function VoyagePlanner() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
 
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + 30);
+  
   const [formData, setFormData] = useState({
     cargo_type: 'coal',
     cargo_quantity: 100000,
     origin: 'INA_TAB',
     destination: 'IND_DHA',
-    required_delivery_date: new Date().toISOString().split('T')[0],
+    required_delivery_date: futureDate.toISOString().split('T')[0],
     number_of_voyages: 3,
   });
 
