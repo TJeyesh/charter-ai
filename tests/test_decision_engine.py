@@ -46,7 +46,10 @@ def test_successful_integration(decision_engine, valid_inputs):
     assert "explanation" in result
     
     assert result["recommended_vessel"]["class"] == "Panamax"
-    assert len(result["explanation"]) > 5
+    assert result["explanation"] is not None
+    assert "recommendation_summary" in result["explanation"]
+    assert len(result["explanation"]["primary_reasons"]) >= 5
+    assert isinstance(result["explanation"]["alternatives_rejected"], list)
 
 def test_graceful_failure(decision_engine, valid_inputs):
     # Overload cargo quantity so Capesize is required, but restrict port draft severely to force failure
@@ -56,4 +59,4 @@ def test_graceful_failure(decision_engine, valid_inputs):
     result = decision_engine.evaluate(valid_inputs)
     assert result["status"] == "ERROR"
     assert "No feasible vessel" in result["error_message"] or "failed" in result["error_message"]
-    assert len(result["explanation"]) == 1
+    assert result["explanation"] is None
