@@ -13,13 +13,14 @@ async def analyze_voyage(request_data: AnalyzeVoyageRequest, request: Request):
 
     # Fetch initialized services from app state
     engine = DecisionEngine(
-        forecast_service=request.app.state.forecast_service,
-        risk_service=request.app.state.risk_service,
-        economics_service=request.app.state.economics_service,
-        vessel_service=request.app.state.vessel_service,
-        contract_service=request.app.state.contract_service,
-        congestion_service=getattr(request.app.state, "congestion_service", None)
+        forecast_service=getattr(request.app.state, "forecast_service", None),
+        risk_service=getattr(request.app.state, "risk_service", None),
+        economics_service=getattr(request.app.state, "economics_service", None),
+        vessel_service=getattr(request.app.state, "vessel_service", None),
+        contract_service=getattr(request.app.state, "contract_service", None),
+        congestion_service=getattr(request.app.state, "congestion_service", None),
     )
+
 
     origin_info = get_mock_port_info(request_data.origin)
     dest_info = get_mock_port_info(request_data.destination)

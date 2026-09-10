@@ -42,6 +42,7 @@ class BacktestEngine:
         self,
         years: Optional[List[int]] = None,
         horizons: Optional[List[int]] = None,
+        max_scenarios: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Executes complete walk-forward evaluation across specified test years.
@@ -73,10 +74,13 @@ class BacktestEngine:
         # 3. Generate Historical Tender Scenarios
         logger.info("Phase 11.B: Generating empirical shipment fixtures for %s...", years)
         scenarios = generate_standard_scenarios(years=years)
+        if max_scenarios is not None and max_scenarios > 0:
+            scenarios = scenarios[:max_scenarios]
 
         # 4. Execute Optimization & Strategy Simulation Replay
         logger.info("Phase 11.C: Replaying %d fixtures across CharterAI and 5 Baselines...", len(scenarios))
         opt_results = self.opt_backtester.run_scenarios(scenarios=scenarios)
+
 
         # 5. Compute Comparative Summary & Savings
         comparative_summary = self._compute_comparative_summary(opt_results["summary_by_strategy"])

@@ -5,10 +5,47 @@ API response models used by FastAPI for automatic OpenAPI documentation
 and response validation.
 """
 
-from datetime import date, datetime
-from typing import Dict, List, Optional, Any
+import uuid
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional, Any, Union
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# Production Operational Metadata & Versions
+# =============================================================================
+
+DEFAULT_API_VERSION: str = "v1.0"
+
+DEFAULT_MODEL_VERSIONS: Dict[str, str] = {
+    "freight_forecaster": "v2.1.0",
+    "congestion_predictor": "v2.0.0",
+    "market_timing": "v1.5.0",
+    "fleet_optimizer": "v2.0.0",
+    "contract_optimizer": "v2.0.0",
+    "risk_engine": "v2.0.0",
+    "decision_engine": "v2.2.0",
+}
+
+DEFAULT_DATA_VERSIONS: Dict[str, str] = {
+    "ports_dataset": "2026.1",
+    "vessels_dataset": "2026.1",
+    "routes_dataset": "2026.1",
+    "freight_indices": "2026.1",
+    "bunker_indices": "2026.1",
+    "data_source": "SYNTHETIC_DEMO",
+}
+
+
+def generate_request_id(prefix: str = "req") -> str:
+    """Generate a unique request ID string."""
+    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+def get_current_iso_timestamp() -> str:
+    """Return current UTC timestamp in ISO 8601 format."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 # =============================================================================
@@ -21,6 +58,11 @@ class HealthResponse(BaseModel):
     db_connected: bool
     model_version: Optional[str] = None
     sih_demo_mode: bool = False
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
 
 
 # =============================================================================
@@ -107,6 +149,11 @@ class ExplainabilityReport(BaseModel):
     recommendation_summary: str
     primary_reasons: List[str]
     alternatives_rejected: List[AlternativeExplanation]
+    structured_answers: Optional[Dict[str, Any]] = None
+    vessel_explanation: Optional[Dict[str, Any]] = None
+    forecast_explanation: Optional[Dict[str, Any]] = None
+    risk_explanation: Optional[Dict[str, Any]] = None
+    shap_analysis: Optional[List[Dict[str, Any]]] = None
 
 
 # =============================================================================
@@ -268,7 +315,15 @@ class ContractOptimizationApiRequest(BaseModel):
     seed: int = Field(default=42, description="Simulation seed")
 
 
+ContractOptimizationRequest = ContractOptimizationApiRequest
+
+
 class ContractOptimizationApiResponse(BaseModel):
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
     recommended_strategy: str
     spot_percentage: float
     short_term_percentage: float
@@ -319,9 +374,16 @@ class RecommendationRequest(BaseModel):
     )
 
 
+CargoRequest = RecommendationRequest
+
+
 class RecommendationResponse(BaseModel):
-    request_id: str
+    request_id: str = Field(default_factory=generate_request_id)
     generated_at: datetime
+    timestamp: Optional[str] = None
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
     recommendation: PrimaryRecommendation
     alternatives: List[PrimaryRecommendation] = []
     forecast: Optional[ForecastResponse] = None
@@ -329,16 +391,23 @@ class RecommendationResponse(BaseModel):
     risk: Optional[RiskAssessmentResponse] = None
     vessel_compatibility: Optional[VesselSelectionResponse] = None
 
+
 class AnalyzeVoyageRequest(BaseModel):
     cargo_type: str
-    cargo_quantity: float
+    cargo_quantity: float = Field(..., gt=0, description="Cargo quantity in metric tonnes")
     origin: str
     destination: str
     required_delivery_date: date
-    number_of_voyages: int
+    number_of_voyages: int = Field(default=1, gt=0, description="Number of voyages")
     contract_preference: Optional[str] = "ANY"
 
+
 class AnalyzeVoyageResponse(BaseModel):
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
     status: str
     error_message: Optional[str] = None
     market_forecast: Dict[str, Any] = Field(default_factory=dict)
@@ -384,13 +453,21 @@ class DecisionExplanationResponse(BaseModel):
     primary_reasons: List[str]
     tradeoff_analysis: str
     alternatives_rejected: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendation_summary: Optional[str] = None
+    structured_answers: Optional[Dict[str, Any]] = None
+    vessel_explanation: Optional[Dict[str, Any]] = None
+    forecast_explanation: Optional[Dict[str, Any]] = None
+    risk_explanation: Optional[Dict[str, Any]] = None
+    shap_analysis: Optional[List[Dict[str, Any]]] = None
 
 
 class DecisionResponse(BaseModel):
     decision_id: str
+    request_id: Optional[str] = None
     timestamp: str
-    model_versions: Dict[str, str] = Field(default_factory=dict)
-    data_versions: Dict[str, str] = Field(default_factory=dict)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
     request_summary: Dict[str, Any] = Field(default_factory=dict)
     market_analysis: MarketAnalysisResponse
     freight_forecast: Dict[str, Any] = Field(default_factory=dict)
@@ -402,3 +479,232 @@ class DecisionResponse(BaseModel):
     contract_strategy: Dict[str, Any] = Field(default_factory=dict)
     confidence: float
     explanation: DecisionExplanationResponse
+    scenario_analysis: Optional[Dict[str, Any]] = None
+    monte_carlo: Optional[Dict[str, Any]] = None
+    multi_horizon_forecast: Optional[Dict[str, Any]] = None
+    historical_rates: Optional[List[Dict[str, Any]]] = None
+    forecast_trajectory: Optional[List[Dict[str, Any]]] = None
+
+
+# =============================================================================
+# Phase 14: Production API Schemas
+# =============================================================================
+
+class FreightForecastApiRequest(BaseModel):
+    """Request payload for POST /api/v1/forecast/freight."""
+    origin: str = Field(..., description="Origin port code, e.g. AUS_NEW")
+    destination: str = Field(..., description="Destination port code, e.g. IND_GVM")
+    vessel_class: str = Field(default="Panamax", description="Vessel class: Capesize, Panamax, Supramax, Handysize")
+    horizon_days: int = Field(default=7, description="Forecast horizon in days (e.g. 3, 7, 14, 30)")
+    cargo_type: str = Field(default="thermal_coal", description="Dry bulk commodity name")
+    model_type: Optional[str] = Field(default=None, description="Model family override: ensemble, arima, xgboost, moving_average")
+
+
+class FreightForecastResponse(BaseModel):
+    """Response schema for POST /api/v1/forecast/freight."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    current_rate: float
+    forecast_rate: float
+    lower_bound: float
+    upper_bound: float
+    trend: str
+    confidence: float
+    model_used: str
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    origin: str
+    destination: str
+    vessel_class: str
+    horizon_days: int
+
+
+class CongestionPredictionRequest(BaseModel):
+    """Request payload for POST /api/v1/predict/congestion."""
+    port_id: str = Field(..., description="Port UN/LOCODE or ID, e.g. IND_PAR, IND_GVM, AUS_NEW")
+    target_date: Optional[str] = Field(default=None, description="Expected arrival date (YYYY-MM-DD)")
+    vessel_class: Optional[str] = Field(default="Panamax", description="Vessel class, e.g. Capesize, Panamax")
+    cargo_type: Optional[str] = Field(default="thermal_coal", description="Cargo type, e.g. thermal_coal")
+    cargo_quantity: Optional[float] = Field(default=75000.0, description="Cargo quantity in metric tonnes")
+
+
+class CongestionPredictionResponse(BaseModel):
+    """Response schema for POST /api/v1/predict/congestion."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    port_id: str
+    expected_wait_days: float
+    p10_wait_days: float
+    p50_wait_days: float
+    p90_wait_days: float
+    delay_probability: float
+    congestion_level: str
+    confidence: float
+    data_source: Optional[str] = None
+    model_used: Optional[str] = None
+
+
+class VesselOptimizationRequest(BaseModel):
+    """Request payload for POST /api/v1/optimize/vessels."""
+    origin_port_id: str = Field(..., description="Origin port code, e.g. AUS_NEW")
+    destination_port_id: str = Field(..., description="Destination port code, e.g. IND_GVM")
+    cargo_tonnage: Optional[float] = Field(default=80000.0, gt=0, description="Total cargo quantity in metric tonnes")
+    cargo_type: Optional[str] = Field(default="thermal_coal", description="Commodity type")
+
+
+class VesselOptimizationResponse(BaseModel):
+    """Response schema for POST /api/v1/optimize/vessels."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    origin_port_id: str
+    destination_port_id: str
+    cargo_tonnage: Optional[float] = None
+    cargo_type: Optional[str] = None
+    feasible: List[VesselCompatibilityResponse] = Field(default_factory=list)
+    excluded: List[VesselCompatibilityResponse] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VoyageOptimizationRequest(BaseModel):
+    """Request payload for POST /api/v1/optimize/voyage."""
+    cargo_quantity_t: float = Field(..., gt=0, description="Total cargo volume in metric tonnes (MT)")
+    origin_port_id: str = Field(default="AUS_NEW", description="Origin load port ID")
+    destination_port_id: str = Field(default="IND_GVM", description="Destination discharge port ID")
+    cargo_type: str = Field(default="Coal", description="Dry bulk commodity name")
+    route_distance_nm: float = Field(default=4800.0, gt=0, description="Actual nautical distance")
+    freight_rate_usd: float = Field(default=22.0, gt=0, description="Baseline freight rate USD/MT")
+    delivery_deadline_days: Optional[float] = Field(default=None, gt=0, description="Target delivery deadline (days)")
+    max_voyages: int = Field(default=5, ge=1, le=10, description="Maximum voyage count")
+    allow_mixed_classes: bool = Field(default=True, description="Enable mixed vessel class combinations")
+    cost_weight: float = Field(default=0.40, ge=0.0, le=1.0)
+    schedule_weight: float = Field(default=0.20, ge=0.0, le=1.0)
+    risk_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    utilization_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    demurrage_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+
+
+class VoyageOptimizationResponse(BaseModel):
+    """Response schema for POST /api/v1/optimize/voyage."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    total_plans_evaluated: int = 0
+    ranked_plans: List[Dict[str, Any]] = Field(default_factory=list)
+    best_plan: Optional[Dict[str, Any]] = None
+
+
+class PortsListResponse(BaseModel):
+    """Response schema for GET /api/v1/ports."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    total_count: int
+    ports: List[PortResponse]
+
+
+class VesselsListResponse(BaseModel):
+    """Response schema for GET /api/v1/vessels."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    total_count: int
+    vessels: List[Dict[str, Any]] = Field(default_factory=list)
+    vessel_classes: List[VesselClassResponse] = Field(default_factory=list)
+
+
+class RoutesListResponse(BaseModel):
+    """Response schema for GET /api/v1/routes."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    total_count: int
+    routes: List[RouteResponse]
+
+
+class MarketSummaryResponse(BaseModel):
+    """Response schema for GET /api/v1/market."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    market_status: str
+    benchmark_freight: Dict[str, float]
+    bunker_prices: Dict[str, float]
+    dry_bulk_indices: Dict[str, float]
+    market_sentiment: str
+    volatility_30d: float
+    commentary: str
+
+
+class ModelMetadataResponse(BaseModel):
+    """Metadata item for an ML model in the registry."""
+    model_name: str
+    model_family: str
+    version: str
+    status: str
+    accuracy_metric: str
+    accuracy_value: float
+    trained_date: str
+    features: List[str]
+    description: str
+
+
+class ModelRegistryResponse(BaseModel):
+    """Response schema for GET /api/v1/models."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    total_models: int
+    models: List[ModelMetadataResponse]
+
+
+class BacktestApiRequest(BaseModel):
+    """Request payload for POST /api/v1/backtest."""
+    years: List[int] = Field(default=[2023, 2024], description="Test years for walk-forward evaluation")
+    horizons: List[int] = Field(default=[7, 14], description="Forecast horizons in days")
+    n_scenarios: Optional[int] = Field(default=5, ge=1, le=50, description="Number of tender scenarios to replay")
+    seed: int = Field(default=42, description="Random seed")
+
+
+class BacktestApiResponse(BaseModel):
+    """Response schema for POST /api/v1/backtest."""
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: str = Field(default_factory=get_current_iso_timestamp)
+    api_version: str = DEFAULT_API_VERSION
+    model_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_MODEL_VERSIONS))
+    data_versions: Dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_DATA_VERSIONS))
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    forecast_evaluation: Dict[str, Any] = Field(default_factory=dict)
+    optimization_evaluation: Dict[str, Any] = Field(default_factory=dict)
+    comparative_analysis: Dict[str, Any] = Field(default_factory=dict)
+    savings_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ErrorResponse(BaseModel):
+    """Standardized error envelope preventing raw traceback leaks."""
+    error: str
+    status_code: int
+    request_id: str
+    timestamp: str
+    message: Optional[str] = None
+    details: Optional[Any] = None
+

@@ -177,6 +177,25 @@ class RiskService:
     ) -> Dict[str, Any]:
         """
         Executes unified probabilistic simulation, scenario generation, and risk scoring.
+        """
+        return self._execute_simulation_and_assess(plan_inputs, n_simulations=n_simulations, seed=seed)
+
+    def run_probabilistic_assessment(
+        self,
+        plan_inputs: Union[CharterPlanInputs, Dict[str, Any]],
+        n_simulations: int = 10_000,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        return self.simulate_and_assess(plan_inputs, n_simulations=n_simulations, seed=seed)
+
+    def _execute_simulation_and_assess(
+        self,
+        plan_inputs: Union[CharterPlanInputs, Dict[str, Any]],
+        n_simulations: int = 10_000,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """
+        Executes unified probabilistic simulation, scenario generation, and risk scoring.
         Returns the exact canonical response schema:
         {
             "expected_cost": float,

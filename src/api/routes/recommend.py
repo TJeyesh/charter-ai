@@ -172,9 +172,15 @@ def _map_to_recommendation_response(
         excluded=[],
     )
 
+    from src.api.serializers import DEFAULT_MODEL_VERSIONS, DEFAULT_DATA_VERSIONS, DEFAULT_API_VERSION
+
     return RecommendationResponse(
         request_id=result.get("decision_id", f"dec_{datetime.now().timestamp()}"),
         generated_at=datetime.fromisoformat(result.get("timestamp", datetime.now(timezone.utc).isoformat())),
+        timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        api_version=DEFAULT_API_VERSION,
+        model_versions=result.get("model_versions", dict(DEFAULT_MODEL_VERSIONS)),
+        data_versions=result.get("data_versions", dict(DEFAULT_DATA_VERSIONS)),
         recommendation=primary_rec,
         alternatives=alternatives,
         forecast=forecast_resp,
@@ -182,6 +188,7 @@ def _map_to_recommendation_response(
         risk=risk_resp,
         vessel_compatibility=vessel_compat,
     )
+
 
 
 @router.post("", response_model=RecommendationResponse)
@@ -291,4 +298,8 @@ async def get_decision(
             detail=result.get("error_message", "Decision optimization failed."),
         )
 
+    result["request_id"] = result.get("decision_id")
+    result["api_version"] = "v1.0"
+
     return result
+

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import VoyagePlanner from './pages/VoyagePlanner';
+import { getHealth } from './api';
 
 // Layout Component
 const Layout = ({ children }: { children: React.ReactNode }) => {
@@ -12,13 +13,13 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [demoMode, setDemoMode] = useState(false);
 
   useEffect(() => {
-    import('./api').then(({ getHealth }) => {
-      getHealth().then(data => {
+    getHealth()
+      .then(data => {
         if (data.sih_demo_mode) {
           setDemoMode(true);
         }
-      }).catch(err => console.error("Health check failed", err));
-    });
+      })
+      .catch(err => console.error("Health check failed", err));
   }, []);
 
   const navItems = [
@@ -92,7 +93,7 @@ function App() {
     <BrowserRouter>
       <Layout>
         <Routes>
-          <Route path="/" element={<div><h2>Dashboard Overview</h2><p style={{marginTop: '1rem', color: 'var(--text-secondary)'}}>Welcome to CharterAI. Select Voyage Planner to begin.</p></div>} />
+          <Route path="/" element={<VoyagePlanner />} />
           <Route path="/voyage-planner" element={<VoyagePlanner />} />
           <Route path="/forecast" element={<div>Forecast Module</div>} />
           <Route path="/optimizer" element={<div>Optimizer Module</div>} />

@@ -1,41 +1,86 @@
-"""
-Charter-AI — Vessels Endpoint.
-"""
-
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+import pandas as pd
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
 from src.api.deps import get_session
-from src.api.serializers import VesselClassResponse, VesselSelectionResponse, VesselCompatibilityResponse
+from src.api.serializers import (
+    VesselClassResponse,
+    VesselSelectionResponse,
+    VesselCompatibilityResponse,
+    VesselsListResponse,
+)
 from src.data.repository import PortRepository, VesselClassRepository
 from src.optimization.vessel_selector import PortConstraints, VesselSelector, VesselSpecs
+from src.data.mock_db import get_mock_vessel_db, get_mock_port_info
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/vessels", tags=["Vessels"])
 
 _selector = VesselSelector()
+_VESSELS_CSV = Path("data/processed/vessels.csv")
 
 
-@router.get("", response_model=List[VesselClassResponse])
-async def list_vessel_classes(
-    db: AsyncSession = Depends(get_session),
-):
-    """List all vessel classes with their specifications."""
-    repo = VesselClassRepository(db)
-    classes = await repo.get_all()
+def _get_standard_vessel_classes() -> List[VesselClassResponse]:
+    """Return standard dry bulk vessel class specifications."""
+    specs = get_mock_vessel_db()
     return [
         VesselClassResponse(
-            class_name=vc.class_name,
-            dwt_min=vc.dwt_min,
-            dwt_max=vc.dwt_max,
-            typical_dwt=vc.typical_dwt,
-            draft_max_m=vc.draft_max_m,
-            loa_max_m=vc.loa_max_m,
-            beam_max_m=vc.beam_max_m,
+            class_name=s.class_name,
+            dwt_min=s.dwt_min,
+            dwt_max=s.dwt_max,
+            typical_dwt=s.typical_dwt,
+            draft_max_m=s.draft_max_m,
+            loa_max_m=s.loa_max_m,
+            beam_max_m=s.beam_max_m,
         )
-        for vc in classes
+        for s in specs
     ]
+
+
+def _load_vessels_from_csv(vessel_class: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load individual vessel registry records from CSV or mock data."""
+    if _VESSELS_CSV.exists():
+        try:
+            df = pd.read_csv(_VESSELS_CSV)
+            if vessel_class:
+                df = df[df["vessel_class"].str.upper() == vessel_class.upper()]
+            return df.to_dict(orient="records")
+        except Exception as e:
+            logger.warning("Error reading %s: %s", _VESSELS_CSV, e)
+    from src.data.mock_db import get_mock_vessels
+    vessels = get_mock_vessels()
+    if vessel_class:
+        vessels = [v for v in vessels if v.get("vessel_class", "").upper() == vessel_class.upper()]
+    return vessels
+
+
+@router.get("", response_model=VesselsListResponse)
+async def list_vessel_classes(
+    vessel_class: Optional[str] = Query(None, description="Optional filter by vessel class (e.g. Capesize, Panamax)"),
+    db: Optional[AsyncSession] = Depends(get_session),
+) -> VesselsListResponse:
+    """
+    GET /api/v1/vessels
+    
+    List vessel specifications, available fleet catalog, and dimensional limits.
+    """
+    classes = _get_standard_vessel_classes()
+    vessels = _load_vessels_from_csv(vessel_class=vessel_class)
+
+    if vessel_class:
+        classes = [c for c in classes if c.class_name.upper() == vessel_class.upper()]
+
+    return VesselsListResponse(
+        total_count=len(vessels),
+        vessels=vessels,
+        vessel_classes=classes,
+    )
 
 
 @router.get("/compatibility", response_model=VesselSelectionResponse)

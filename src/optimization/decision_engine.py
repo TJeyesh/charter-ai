@@ -28,7 +28,7 @@ Orchestrates the end-to-end maritime chartering intelligence architecture:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 
@@ -55,6 +55,7 @@ from src.optimization.contract_optimizer import (
     VesselAvailability,
     RiskTolerance,
 )
+from src.explainability.decision_explainer import DecisionExplainer
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -68,6 +69,7 @@ MODEL_VERSIONS = {
     "fleet_optimizer": "v2.0.0-multi-criteria",
     "contract_optimizer": "v2.0.0-risk-aware",
     "market_timing": "v2.0.0-benefit-quantiles",
+    "explainability_engine": "v2.0.0-shap-7questions",
 }
 
 DATA_VERSIONS = {
@@ -170,6 +172,7 @@ class DecisionEngine:
         self.economics_service = economics_service or VoyageEconomicsService(congestion_service=self.congestion_service)
         self.vessel_service = vessel_service or VesselOptimizationService()
         self.contract_service = contract_service or ContractOptimizationService()
+        self.explainer = DecisionExplainer()
 
         # Orchestration sub-engines
         self.fleet_optimizer = MultiVoyageOptimizer(
@@ -383,6 +386,102 @@ class DecisionEngine:
 
             risk_result = self.risk_service.evaluate_risk(risk_inputs)
 
+            # Probabilistic assessment & deterministic scenario evaluation (Phase 8 & 13)
+            from src.risk.monte_carlo import CharterPlanInputs
+            mc_plan_inputs = CharterPlanInputs(
+                cargo_quantity_t=inputs.cargo_quantity_t,
+                base_freight_rate=forecast_rate,
+                freight_volatility_pct=volatility_pct,
+                freight_rate_p10=p10_rate,
+                freight_rate_p90=p90_rate,
+                base_bunker_price=650.0,
+                sea_distance_nm=sailing_dist_nm,
+                expected_wait_days=predicted_wait_days,
+                p90_wait_days=p90_wait_days,
+                delivery_deadline_days=delivery_deadline_days,
+                port_charges_usd=best_plan.port_cost,
+                misc_agency_usd=best_plan.miscellaneous_cost,
+            )
+            probabilistic_res = self.risk_service.run_probabilistic_assessment(
+                mc_plan_inputs, n_simulations=5000, seed=42
+            )
+            scenario_analysis_dict = probabilistic_res.get("scenarios", {})
+            monte_carlo_dict = {
+                "expected_cost": probabilistic_res.get("expected_cost"),
+                "p10_cost": probabilistic_res.get("p10_cost"),
+                "p50_cost": probabilistic_res.get("p50_cost"),
+                "p90_cost": probabilistic_res.get("p90_cost"),
+                "p10_cpt": round(probabilistic_res.get("p10_cost", 0) / max(1.0, inputs.cargo_quantity_t), 2),
+                "p50_cpt": round(probabilistic_res.get("p50_cost", 0) / max(1.0, inputs.cargo_quantity_t), 2),
+                "p90_cpt": round(probabilistic_res.get("p90_cost", 0) / max(1.0, inputs.cargo_quantity_t), 2),
+                "demurrage_probability": probabilistic_res.get("demurrage_probability"),
+                "late_delivery_probability": probabilistic_res.get("late_delivery_probability"),
+                "cost_distribution": probabilistic_res.get("cost_distribution", []),
+            }
+
+            # Multi-horizon forecasts (3d, 7d, 14d, 30d)
+            multi_horizon = {}
+            for h in [3, 7, 14, 30]:
+                p = self.forecast_service.predict_freight_api(
+                    origin=inputs.origin_port_id,
+                    destination=inputs.destination_port_id,
+                    vessel_class=primary_vessel_class,
+                    cargo_type=inputs.cargo_type,
+                    horizon_days=h,
+                )
+                multi_horizon[f"forecast_{h}d"] = {
+                    "rate": round(float(p["forecast_rate"]), 2),
+                    "p10": round(float(p["lower_bound"]), 2),
+                    "p90": round(float(p["upper_bound"]), 2),
+                    "trend": p["trend"],
+                    "confidence": p["confidence"],
+                }
+
+            # Historical freight series (last 30 observations)
+            df_hist = self.forecast_service.forecaster.load_historical_data(
+                origin=inputs.origin_port_id,
+                destination=inputs.destination_port_id,
+                vessel_class=primary_vessel_class,
+                cargo_type=inputs.cargo_type,
+            )
+            historical_records = []
+            if not df_hist.empty:
+                tail_df = df_hist.tail(30)
+                for _, row in tail_df.iterrows():
+                    d_str = str(row["date"])[:10]
+                    historical_records.append({
+                        "date": d_str,
+                        "rate": round(float(row["freight_rate"]), 2),
+                    })
+
+            # Forecast trajectory with uncertainty band
+            forecast_trajectory = []
+            today = datetime.now().date()
+            forecast_trajectory.append({
+                "date": today.isoformat(),
+                "rate": current_rate,
+                "p10": current_rate,
+                "p90": current_rate,
+                "is_forecast": False,
+            })
+            target_30 = multi_horizon.get("forecast_30d", {}).get("rate", forecast_rate)
+            lower_30 = multi_horizon.get("forecast_30d", {}).get("p10", p10_rate)
+            upper_30 = multi_horizon.get("forecast_30d", {}).get("p90", p90_rate)
+
+            for day in range(1, 31):
+                p_date = today + timedelta(days=day)
+                alpha = day / 30.0
+                p_val = current_rate + alpha * (target_30 - current_rate)
+                b_low = alpha * (target_30 - lower_30)
+                b_high = alpha * (upper_30 - target_30)
+                forecast_trajectory.append({
+                    "date": p_date.isoformat(),
+                    "rate": round(p_val, 2),
+                    "p10": round(max(0.0, p_val - b_low), 2),
+                    "p90": round(p_val + b_high, 2),
+                    "is_forecast": True,
+                })
+
             # -----------------------------------------------------------------
             # Step 9: Risk-Aware Contract Optimization (Phase 9)
             # -----------------------------------------------------------------
@@ -416,8 +515,15 @@ class DecisionEngine:
             })
 
             # -----------------------------------------------------------------
-            # Step 10: Structured Comparative Explainability
+            # Step 10: Phase 12 Explainable AI (XAI) Synthesis
             # -----------------------------------------------------------------
+            composite_confidence = round(
+                (forecast_confidence * 0.40)
+                + (best_plan.delivery_probability * 0.35)
+                + ((1.0 - (risk_result.composite_score / 100.0)) * 0.25),
+                2
+            )
+
             # Comparative tradeoff against the runner-up plan
             if alternative_plans:
                 runner_up = alternative_plans[0]
@@ -466,13 +572,30 @@ class DecisionEngine:
                     "reasons_rejected": [reason_str],
                 })
 
-            explainability_report = {
-                "summary": f"BOOK {risk_aware_rec.recommended_strategy} with {best_plan.plan_id}",
-                "recommendation_summary": f"BOOK {risk_aware_rec.recommended_strategy} with {best_plan.plan_id}",
-                "primary_reasons": primary_reasons,
-                "tradeoff_analysis": tradeoff_text,
-                "alternatives_rejected": alternatives_rejected,
-            }
+            # Run Phase 12 master explainer
+            unified_explanation = self.explainer.generate_decision_explanation(
+                recommended_plan=best_plan,
+                all_candidate_plans=ranked_plans,
+                port_compatibility_info=port_analysis,
+                origin_port_id=inputs.origin_port_id,
+                destination_port_id=inputs.destination_port_id,
+                forecast_dict=forecast_dict,
+                forecaster_model_obj=getattr(self.forecast_service.forecaster, "active_model", None),
+                feature_context=None,
+                risk_result=risk_result,
+                contract_rec=risk_aware_rec,
+                all_contract_evaluations=getattr(risk_aware_rec, "all_evaluations", []),
+                risk_tolerance=inputs.risk_tolerance,
+                timing_action=timing_result.recommendation,
+                composite_confidence=composite_confidence,
+            )
+
+            explainability_report = unified_explanation.to_dict()
+            # Ensure primary_reasons and tradeoff_text contain legacy phrases for full backward-compatibility
+            explainability_report["tradeoff_analysis"] = tradeoff_text
+            for pr in primary_reasons:
+                if pr not in explainability_report["primary_reasons"]:
+                    explainability_report["primary_reasons"].append(pr)
 
             # -----------------------------------------------------------------
             # Step 11: Canonical DecisionResponse Payload & Backward-Compatibility
@@ -481,6 +604,7 @@ class DecisionEngine:
             timestamp_str = datetime.now(timezone.utc).isoformat()
 
             canonical_recommended_plan = {
+                "plan_id": best_plan.plan_id,
                 "vessel_class": primary_vessel_class,
                 "vessel_count": best_plan.number_of_vessels,
                 "voyages": best_plan.number_of_voyages,
@@ -559,10 +683,19 @@ class DecisionEngine:
                 "recommended_plan": canonical_recommended_plan,
                 "alternative_plans": [p.to_dict() for p in alternative_plans],
                 "economics": canonical_economics,
-                "risk": risk_result.to_dict(),
+                "risk": {
+                    **risk_result.to_dict(),
+                    "scenario_analysis": scenario_analysis_dict,
+                    "monte_carlo": monte_carlo_dict,
+                },
                 "contract_strategy": canonical_contract_strategy,
                 "confidence": composite_confidence,
                 "explanation": explainability_report,
+                "scenario_analysis": scenario_analysis_dict,
+                "monte_carlo": monte_carlo_dict,
+                "multi_horizon_forecast": multi_horizon,
+                "historical_rates": historical_records,
+                "forecast_trajectory": forecast_trajectory,
 
                 # Legacy Backward-Compatibility Keys
                 "status": "SUCCESS",

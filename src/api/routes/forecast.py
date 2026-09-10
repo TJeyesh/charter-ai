@@ -21,11 +21,63 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Request, Query, HTTPException
 
-from src.api.serializers import ForecastResponse, FreightForecastApiResponse
+from src.api.serializers import (
+    ForecastResponse,
+    FreightForecastApiResponse,
+    FreightForecastApiRequest,
+    FreightForecastResponse,
+)
 from src.services.freight_forecast_service import FreightForecastService
 from src.models.market_timing import MarketTimingEngine, MarketTimingInputs
 
 router = APIRouter(prefix="/forecast", tags=["Forecast"])
+
+
+@router.post("/freight", response_model=FreightForecastResponse)
+async def post_freight_forecast(
+    payload: FreightForecastApiRequest,
+    request: Request,
+) -> FreightForecastResponse:
+    """
+    Generate high-accuracy machine learning & statistical freight rate forecast
+    for specified corridor, vessel class, and forecast horizon (e.g., 3, 7, 14, 30 days).
+    """
+    service: FreightForecastService = getattr(
+        request.app.state, "forecast_service", None
+    )
+    if service is None:
+        service = FreightForecastService()
+
+    try:
+        pred = service.predict_freight_api(
+            origin=payload.origin,
+            destination=payload.destination,
+            vessel_class=payload.vessel_class,
+            cargo_type=payload.cargo_type,
+            horizon_days=payload.horizon_days,
+            model_type=payload.model_type,
+        )
+
+        return FreightForecastResponse(
+            current_rate=pred["current_rate"],
+            forecast_rate=pred["forecast_rate"],
+            lower_bound=pred["lower_bound"],
+            upper_bound=pred["upper_bound"],
+            trend=pred["trend"],
+            confidence=pred["confidence"],
+            model_used=pred["model_used"],
+            metrics=pred.get("metrics", {}),
+            origin=payload.origin,
+            destination=payload.destination,
+            vessel_class=payload.vessel_class,
+            horizon_days=payload.horizon_days,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Freight forecasting engine error: {str(e)}"
+        )
+
 
 
 @router.get("", response_model=ForecastResponse)
@@ -70,6 +122,128 @@ async def get_forecast(
         raise HTTPException(
             status_code=500,
             detail=f"Freight forecasting engine error: {str(e)}"
+        )
+
+
+@router.get("/intelligence")
+async def get_market_intelligence(
+    request: Request,
+    origin: str = Query(..., description="Origin port code, e.g. AUS_NEW"),
+    destination: str = Query(..., description="Destination port code, e.g. IND_GVM"),
+    vessel_class: str = Query("Panamax", description="Vessel class, e.g. Capesize, Panamax"),
+    cargo_type: str = Query("thermal_coal", description="Cargo type, e.g. thermal_coal"),
+):
+    """
+    Produce multi-horizon forecast intelligence (3d, 7d, 14d, 30d) and historical/forecast
+    chart trajectory with P10/P90 uncertainty intervals.
+    """
+    from datetime import datetime, timedelta
+
+    service: FreightForecastService = getattr(
+        request.app.state, "forecast_service", None
+    )
+    if service is None:
+        service = FreightForecastService()
+
+    try:
+        # 1. Multi-horizon forecasts
+        horizons = [3, 7, 14, 30]
+        preds = {}
+        for h in horizons:
+            preds[f"forecast_{h}d"] = service.predict_freight_api(
+                origin=origin,
+                destination=destination,
+                vessel_class=vessel_class,
+                cargo_type=cargo_type,
+                horizon_days=h,
+            )
+
+        current_rate = float(preds["forecast_7d"]["current_rate"])
+
+        # 2. Historical data points
+        df_hist = service.forecaster.load_historical_data(
+            origin=origin,
+            destination=destination,
+            vessel_class=vessel_class,
+            cargo_type=cargo_type,
+        )
+        historical_records = []
+        if not df_hist.empty:
+            tail_df = df_hist.tail(30)
+            for _, row in tail_df.iterrows():
+                d_str = str(row["date"])[:10]
+                historical_records.append({
+                    "date": d_str,
+                    "rate": round(float(row["freight_rate"]), 2),
+                })
+
+        # 3. Build continuous forecast trajectory with uncertainty band for chart
+        forecast_trajectory = []
+        today = datetime.now().date()
+        forecast_trajectory.append({
+            "date": today.isoformat(),
+            "rate": current_rate,
+            "p10": current_rate,
+            "p90": current_rate,
+            "is_forecast": False,
+        })
+
+        pred_30 = preds["forecast_30d"]
+        target_rate = float(pred_30["forecast_rate"])
+        lower_target = float(pred_30["lower_bound"])
+        upper_target = float(pred_30["upper_bound"])
+
+        for day in range(1, 31):
+            p_date = today + timedelta(days=day)
+            alpha = day / 30.0
+            p_val = current_rate + alpha * (target_rate - current_rate)
+            band_width_lower = alpha * (target_rate - lower_target)
+            band_width_upper = alpha * (upper_target - target_rate)
+            forecast_trajectory.append({
+                "date": p_date.isoformat(),
+                "rate": round(p_val, 2),
+                "p10": round(max(0.0, p_val - band_width_lower), 2),
+                "p90": round(p_val + band_width_upper, 2),
+                "is_forecast": True,
+            })
+
+        return {
+            "current_rate": current_rate,
+            "forecast_3d": {
+                "rate": round(float(preds["forecast_3d"]["forecast_rate"]), 2),
+                "p10": round(float(preds["forecast_3d"]["lower_bound"]), 2),
+                "p90": round(float(preds["forecast_3d"]["upper_bound"]), 2),
+                "trend": preds["forecast_3d"]["trend"],
+                "confidence": preds["forecast_3d"]["confidence"],
+            },
+            "forecast_7d": {
+                "rate": round(float(preds["forecast_7d"]["forecast_rate"]), 2),
+                "p10": round(float(preds["forecast_7d"]["lower_bound"]), 2),
+                "p90": round(float(preds["forecast_7d"]["upper_bound"]), 2),
+                "trend": preds["forecast_7d"]["trend"],
+                "confidence": preds["forecast_7d"]["confidence"],
+            },
+            "forecast_14d": {
+                "rate": round(float(preds["forecast_14d"]["forecast_rate"]), 2),
+                "p10": round(float(preds["forecast_14d"]["lower_bound"]), 2),
+                "p90": round(float(preds["forecast_14d"]["upper_bound"]), 2),
+                "trend": preds["forecast_14d"]["trend"],
+                "confidence": preds["forecast_14d"]["confidence"],
+            },
+            "forecast_30d": {
+                "rate": round(float(preds["forecast_30d"]["forecast_rate"]), 2),
+                "p10": round(float(preds["forecast_30d"]["lower_bound"]), 2),
+                "p90": round(float(preds["forecast_30d"]["upper_bound"]), 2),
+                "trend": preds["forecast_30d"]["trend"],
+                "confidence": preds["forecast_30d"]["confidence"],
+            },
+            "historical_rates": historical_records,
+            "forecast_trajectory": forecast_trajectory,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Freight intelligence engine error: {str(e)}"
         )
 
 

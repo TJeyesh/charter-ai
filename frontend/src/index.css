@@ -347,3 +347,210 @@ body {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* =========================================
+   Phase 13: CharterAI V2 Dashboard Styles
+========================================= */
+
+/* Timing Action Badges */
+.badge-timing {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.35rem 0.9rem;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: uppercase;
+}
+
+.badge-book-now {
+  background-color: rgba(56, 161, 105, 0.2);
+  color: #48BB78;
+  border: 1px solid rgba(56, 161, 105, 0.4);
+  box-shadow: 0 0 10px rgba(56, 161, 105, 0.15);
+}
+
+.badge-wait {
+  background-color: rgba(160, 174, 192, 0.2);
+  color: #E2E8F0;
+  border: 1px solid rgba(160, 174, 192, 0.3);
+}
+
+.badge-monitor {
+  background-color: rgba(49, 130, 206, 0.2);
+  color: #63B3ED;
+  border: 1px solid rgba(49, 130, 206, 0.4);
+  box-shadow: 0 0 10px rgba(49, 130, 206, 0.15);
+}
+
+.badge-negotiate {
+  background-color: rgba(221, 107, 32, 0.2);
+  color: #ED8936;
+  border: 1px solid rgba(221, 107, 32, 0.4);
+  box-shadow: 0 0 10px rgba(221, 107, 32, 0.15);
+}
+
+.badge-hybrid {
+  background-color: rgba(128, 90, 213, 0.2);
+  color: #B794F4;
+  border: 1px solid rgba(128, 90, 213, 0.4);
+  box-shadow: 0 0 10px rgba(128, 90, 213, 0.15);
+}
+
+/* Comparison Table */
+.table-container {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+}
+
+.v2-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.v2-table th {
+  background-color: rgba(0, 0, 0, 0.2);
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.v2-table td {
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.v2-table tr:hover td {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.v2-table tr.selected td {
+  background-color: rgba(49, 130, 206, 0.12);
+  border-bottom-color: rgba(49, 130, 206, 0.3);
+}
+
+/* Scenario Analysis Cards */
+.scenario-card {
+  padding: 1.25rem;
+  border-radius: var(--radius-md);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.scenario-card:hover {
+  transform: translateY(-2px);
+}
+
+.scenario-card.best {
+  border-top: 4px solid var(--accent-success);
+}
+
+.scenario-card.base {
+  border-top: 4px solid var(--accent-primary);
+}
+
+.scenario-card.worst {
+  border-top: 4px solid var(--accent-danger);
+}
+
+/* Sensitivity Sliders & Inputs */
+.slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background-color: var(--bg-tertiary);
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color-light);
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.slider-value {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--accent-secondary);
+}
+
+.range-slider {
+  width: 100%;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+/* Delta Indicators */
+.delta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.delta-saving {
+  background-color: rgba(56, 161, 105, 0.15);
+  color: #48BB78;
+}
+
+.delta-cost {
+  background-color: rgba(229, 62, 62, 0.15);
+  color: #F56565;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4rem 2rem;
+  background-color: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  gap: 1rem;
+}
+
+/* Skeleton Loading Shimmer */
+.skeleton-box {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 25%, rgba(255, 255, 255, 0.08) 50%, rgba(255, 255, 255, 0.03) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
