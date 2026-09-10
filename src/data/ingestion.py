@@ -1,176 +1,159 @@
 """
-Charter-AI — Data Ingestion Pipeline.
+Charter-AI — Data Ingestion Pipeline (V2).
 
-Loads CSV datasets into PostgreSQL. Designed to be idempotent —
-safe to re-run with updated data files.
+Loads CSV datasets into SQL database models. Designed to be idempotent.
+Uses normalized domain models and robust CSV parsing.
 """
 
 from pathlib import Path
-from typing import Optional
-
+from typing import Dict, Optional
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from src.data.db import Base, get_sync_engine, get_sync_session_factory
+from src.data.db import get_sync_engine, get_sync_session_factory
+from src.data.loaders.csv_loader import CSVLoader
+from src.data.loaders.db_loader import DatabaseLoader
 from src.data.models import (
-    Commodity,
-    Congestion,
-    EconomicIndicator,
-    Event,
-    FreightRate,
     Port,
-    Route,
+    Vessel,
     VesselClassModel,
+    Route,
+    FreightRate,
+    BunkerPrice,
+    DryBulkIndex,
+    CommodityPrice,
+    Commodity,
+    PortCongestion,
     Weather,
+    EconomicIndicator,
+    GeopoliticalEvent,
 )
 from src.utils.config import get_settings
-from src.utils.logging import get_logger, setup_logging
+from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _ensure_postgis(engine) -> None:
-    """Enable PostGIS extension if not already enabled."""
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
-        conn.commit()
-
-
-def _load_csv(filepath: Path) -> pd.DataFrame:
-    """Load a CSV with basic cleaning."""
-    logger.info(f"Loading {filepath.name} ({filepath.stat().st_size:,} bytes)")
-    df = pd.read_csv(filepath, encoding="utf-8")
-    # Strip whitespace from string columns
-    for col in df.select_dtypes(include=["object"]).columns:
-        df[col] = df[col].str.strip()
-    return df
-
-
 def ingest_ports(session: Session, data_dir: Path) -> int:
     """Load ports.csv into the ports table."""
-    df = _load_csv(data_dir / "ports.csv")
+    loader = CSVLoader()
+    csv_path = data_dir / "ports.csv"
+    if not csv_path.exists():
+        logger.warning(f"{csv_path} does not exist.")
+        return 0
+
+    df = loader.load(csv_path)
     count = 0
     for _, row in df.iterrows():
         port = Port(
-            port_id=row["port_id"],
-            port_name=row["port_name"],
-            state=row["state"],
-            country=row["country"],
-            latitude=row["latitude"],
-            longitude=row["longitude"],
-            port_type=row["port_type"],
-            operator=row["operator"],
-            berths_total=int(row["berths_total"]) if pd.notna(row["berths_total"]) else None,
-            max_draft_m=float(row["max_draft_m"]) if pd.notna(row["max_draft_m"]) else None,
-            max_loa_m=float(row["max_loa_m"]) if pd.notna(row["max_loa_m"]) else None,
-            max_beam_m=float(row["max_beam_m"]) if pd.notna(row["max_beam_m"]) else None,
-            max_dwt=int(row["max_dwt_capesize_capable"]) if pd.notna(row.get("max_dwt_capesize_capable")) else None,
-            annual_capacity_mtpa=str(row.get("annual_capacity_mtpa", "")),
-            primary_cargo=str(row.get("primary_cargo", "")),
-            data_type=row["data_type"],
-            source_note=str(row.get("source_note", "")),
+            port_id=str(row["port_id"]).strip(),
+            port_name=str(row["port_name"]).strip(),
+            country=str(row.get("country", "IND")).strip(),
+            latitude=float(row["latitude"]),
+            longitude=float(row["longitude"]),
+            max_draft_m=float(row.get("max_draft_m", row.get("max_draft", 16.0))),
+            max_loa_m=float(row.get("max_loa_m", row.get("max_loa", 260.0))),
+            max_beam_m=float(row.get("max_beam_m", row.get("max_beam", 40.0))),
+            cargo_handling_rate_mt_day=float(row.get("cargo_handling_rate_mt_day", row.get("cargo_handling_rate", 25000.0))),
+            berth_count=int(row.get("berth_count", row.get("berths_total", row.get("berthing_capacity", 4)))),
+            coal_terminal=bool(row.get("coal_terminal", True)),
+            iron_ore_terminal=bool(row.get("iron_ore_terminal", False)),
+            grain_terminal=bool(row.get("grain_terminal", False)),
+            tidal_restriction=bool(row.get("tidal_restriction", False)),
+            night_navigation_restriction=bool(row.get("night_navigation_restriction", False)),
+            source=str(row.get("source", "SYNTHETIC_DEMO")),
+            confidence_level=str(row.get("confidence_level", "LOW")),
+            state=str(row.get("state", "")) if pd.notna(row.get("state")) else None,
+            max_dwt=int(row["max_dwt"]) if pd.notna(row.get("max_dwt")) else None,
         )
-        session.merge(port)  # Upsert by primary key
+        session.merge(port)
         count += 1
 
-    # Set PostGIS geometry from lat/lon
-    session.flush()
-    session.execute(
-        text(
-            "UPDATE ports SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) "
-            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND geom IS NULL"
-        )
-    )
     session.commit()
     logger.info(f"Ingested {count} ports")
     return count
 
 
-def ingest_vessel_classes(session: Session, data_dir: Path) -> int:
-    """Load vessels.csv into the vessel_classes table."""
-    df = _load_csv(data_dir / "vessels.csv")
+def ingest_vessels(session: Session, data_dir: Path) -> int:
+    """Load vessels.csv into the vessels table."""
+    loader = CSVLoader()
+    csv_path = data_dir / "vessels.csv"
+    if not csv_path.exists():
+        logger.warning(f"{csv_path} does not exist.")
+        return 0
+
+    df = loader.load(csv_path)
     count = 0
     for _, row in df.iterrows():
-        vc = VesselClassModel(
-            class_id=row["vessel_class"].replace(" ", "_").replace("/", "_"),
-            class_name=row["vessel_class"],
-            dwt_min=int(row["dwt_min"]),
-            dwt_max=int(row["dwt_max"]),
-            typical_dwt=int(row["typical_dwt"]),
-            loa_min_m=float(row["loa_min_m"]),
-            loa_max_m=float(row["loa_max_m"]),
-            beam_min_m=float(row["beam_min_m"]),
-            beam_max_m=float(row["beam_max_m"]),
-            draft_min_m=float(row["draft_min_m"]),
-            draft_max_m=float(row["draft_max_m"]),
-            typical_cargo=str(row.get("typical_cargo", "")),
-            data_type=row["data_type"],
-            source_note=str(row.get("source_note", "")),
+        vessel = Vessel(
+            vessel_id=str(row["vessel_id"]).strip(),
+            imo_number=str(row.get("imo_number", f"9{count:06d}")).strip(),
+            vessel_name=str(row.get("vessel_name", f"Bulk Carrier {row['vessel_id']}")).strip(),
+            vessel_class=str(row.get("vessel_class", row.get("vessel_type", "Panamax"))).strip(),
+            dwt=int(row["dwt"]),
+            loa_m=float(row.get("loa_m", row.get("loa", 225.0))),
+            beam_m=float(row.get("beam_m", row.get("beam", 32.2))),
+            max_draft_m=float(row.get("max_draft_m", row.get("draft", 14.0))),
+            service_speed_knots=float(row.get("service_speed_knots", row.get("speed", 13.0))),
+            ballast_speed_knots=float(row.get("ballast_speed_knots", 13.5)),
+            laden_speed_knots=float(row.get("laden_speed_knots", 12.5)),
+            fuel_consumption_mt_day=float(row.get("fuel_consumption_mt_day", row.get("fuel_consumption", 30.0))),
+            age_years=int(row.get("age_years", row.get("age", 5))),
+            current_latitude=float(row["current_latitude"]) if pd.notna(row.get("current_latitude")) else None,
+            current_longitude=float(row["current_longitude"]) if pd.notna(row.get("current_longitude")) else None,
+            availability_status=str(row.get("availability_status", "AVAILABLE")),
+            data_source=str(row.get("data_source", row.get("source", "SYNTHETIC_DEMO"))),
         )
-        session.merge(vc)
+        session.merge(vessel)
         count += 1
+
     session.commit()
-    logger.info(f"Ingested {count} vessel classes")
+    logger.info(f"Ingested {count} vessels")
     return count
 
 
-def ingest_freight_rates(session: Session, data_dir: Path) -> int:
-    """Bulk-load freight_rates.csv using pandas to_sql for performance."""
-    df = _load_csv(data_dir / "freight_rates.csv")
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+def ingest_routes(session: Session, data_dir: Path) -> int:
+    """Load routes.csv into routes table."""
+    loader = CSVLoader()
+    csv_path = data_dir / "routes.csv"
+    if not csv_path.exists():
+        return 0
 
-    engine = session.get_bind()
-    # Use pandas to_sql with "append" for bulk insert
-    df.to_sql("freight_rates", engine, if_exists="append", index=False, method="multi")
-    count = len(df)
-    logger.info(f"Ingested {count:,} freight rate records")
+    df = loader.load(csv_path)
+    count = 0
+    for _, row in df.iterrows():
+        route = Route(
+            route_id=str(row["route_id"]).strip(),
+            origin_port=str(row.get("origin_port", row.get("origin"))).strip(),
+            destination_port=str(row.get("destination_port", row.get("destination"))).strip(),
+            distance_nm=float(row["distance_nm"]),
+            typical_duration_days=float(row.get("typical_duration_days", float(row["distance_nm"]) / (13.0 * 24))),
+            route_type=str(row.get("route_type", "direct")),
+            seasonal_factor=float(row.get("seasonal_factor", 1.0)),
+            source=str(row.get("source", "SYNTHETIC_DEMO")),
+        )
+        session.merge(route)
+        count += 1
+
+    session.commit()
+    logger.info(f"Ingested {count} routes")
     return count
 
 
-def ingest_all(data_dir: Optional[str] = None) -> dict:
+def ingest_all(data_dir: Optional[str] = None) -> Dict[str, int]:
     """
-    Run the full ingestion pipeline.
-
-    Args:
-        data_dir: Path to the raw data directory. Defaults to settings.raw_data_dir.
-
-    Returns:
-        Dictionary of {table_name: records_loaded} counts.
+    Run the full data ingestion pipeline.
     """
     settings = get_settings()
-    data_path = Path(data_dir) if data_dir else Path(settings.raw_data_dir)
+    target_dir = Path(data_dir) if data_dir else Path(settings.raw_data_dir)
 
-    if not data_path.exists():
-        raise FileNotFoundError(f"Data directory not found: {data_path}")
+    session_factory = get_sync_session_factory()
+    counts = {}
 
-    engine = get_sync_engine()
-    _ensure_postgis(engine)
-    Base.metadata.create_all(engine)
+    with session_factory() as session:
+        counts["ports"] = ingest_ports(session, target_dir)
+        counts["vessels"] = ingest_vessels(session, target_dir)
+        counts["routes"] = ingest_routes(session, target_dir)
 
-    factory = get_sync_session_factory()
-    results = {}
-
-    with factory() as session:
-        # Order matters: reference tables first, then transactional data
-        if (data_path / "ports.csv").exists():
-            results["ports"] = ingest_ports(session, data_path)
-        if (data_path / "vessels.csv").exists():
-            results["vessel_classes"] = ingest_vessel_classes(session, data_path)
-        if (data_path / "freight_rates.csv").exists():
-            results["freight_rates"] = ingest_freight_rates(session, data_path)
-
-        # Remaining tables follow the same pattern (stubs for now)
-        logger.info(f"Ingestion complete: {results}")
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    setup_logging(level="INFO", fmt="text")
-    results = ingest_all()
-    print(f"Ingestion results: {results}")
+    return counts

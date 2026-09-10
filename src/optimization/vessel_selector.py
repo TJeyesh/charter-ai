@@ -14,6 +14,7 @@ from datetime import datetime
 
 from src.utils.constants import VesselClass
 from src.utils.logging import get_logger
+from src.economics.voyage_cost import VoyageCostInputs, calculate_voyage_cost, calculate_sailing_days
 
 logger = get_logger(__name__)
 
@@ -217,7 +218,7 @@ class VesselOptimizationResult:
     score: float
     reasons: str
     alternatives: List[VesselScore] = field(default_factory=list)
-    
+
     def to_dict(self):
         return {
             "recommended_vessel": self.recommended_vessel,
@@ -238,7 +239,7 @@ class VesselOptimizer:
     """
     def __init__(self):
         self.physical_selector = VesselSelector()
-        
+
     def optimize(
         self,
         cargo_type: str,
@@ -256,19 +257,19 @@ class VesselOptimizer:
         selection_result = self.physical_selector.select_vessels(
             origin_port, destination_port, vessel_specs, cargo_quantity
         )
-        
+
         comp_map = {r.vessel_class: r for r in selection_result.feasible + selection_result.excluded}
         scores = []
-        
+
         # Timeline constraint
         allowed_days = (required_delivery_date - expected_loading_date).days
         if allowed_days <= 0:
             allowed_days = 1 # Prevent division by zero
-            
+
         for vessel in vessel_specs:
             comp_result = comp_map[vessel.class_name]
             reasons = []
-            
+
             # --- Port Compatibility Score ---
             if comp_result.is_compatible:
                 port_score = 100.0
@@ -276,7 +277,7 @@ class VesselOptimizer:
             else:
                 port_score = 0.0
                 reasons.append(f"Port restrictions: {', '.join(comp_result.violations)}.")
-                
+
             # --- Cargo Suitability Score ---
             if cargo_quantity > vessel.dwt_max:
                 cargo_score = 0.0
@@ -292,14 +293,32 @@ class VesselOptimizer:
                 else:
                     cargo_score = 100 - ((util_ratio - 1.0) * 50)
                 cargo_score = max(0.0, min(100.0, cargo_score))
-                
+
                 if cargo_score > 85:
                     reasons.append("Optimal cargo utilization.")
                 else:
                     reasons.append("Adequate cargo utilization.")
-                    
-            # --- Operational Score ---
-            est_voyage_days = 14 # Estimated heuristic
+
+            # --- Operational Score (Dynamic Realistic Duration) ---
+            speed_knots = {
+                "Handysize": 12.0,
+                "Supramax": 12.5,
+                "Panamax": 13.0,
+                "Capesize": 13.5
+            }.get(vessel.class_name, 13.0)
+
+            # Realistic route distance (default 3200 nm for standard trade routes)
+            route_distance_nm = 3200.0
+            sailing_days = calculate_sailing_days(route_distance_nm, speed_knots)
+
+            # Handling rates at origin and destination
+            origin_rate = getattr(origin_port, "cargo_handling_rate_mt_day", 35000.0) or 35000.0
+            dest_rate = getattr(destination_port, "cargo_handling_rate_mt_day", 30000.0) or 30000.0
+            load_days = cargo_quantity / origin_rate
+            disch_days = cargo_quantity / dest_rate
+            expected_wait_days = 2.0
+
+            est_voyage_days = sailing_days + load_days + disch_days + expected_wait_days
             if allowed_days < est_voyage_days:
                 op_score = 0.0
                 reasons.append("Cannot meet required delivery date.")
@@ -307,34 +326,60 @@ class VesselOptimizer:
                 buffer = allowed_days - est_voyage_days
                 op_score = min(100.0, 50.0 + (buffer * 5))
                 reasons.append("Meets delivery schedule.")
-                
-            # --- Economic Score ---
-            base_cost_per_tonne = 30.0 
-            if vessel.class_name == "Handysize": cost = base_cost_per_tonne * 1.2
-            elif vessel.class_name == "Supramax": cost = base_cost_per_tonne * 1.0
-            elif vessel.class_name == "Panamax": cost = base_cost_per_tonne * 0.8
-            else: cost = base_cost_per_tonne * 0.6
-            
+
+            # --- Economic Score (Realistic Voyage Economics) ---
             if cargo_score == 0:
                 econ_score = 0.0
             else:
-                actual_cost_per_tonne = cost / max(0.1, (cargo_quantity / vessel.typical_dwt))
-                econ_score = max(0.0, min(100.0, 120.0 - actual_cost_per_tonne))
-                
+                daily_hire = {
+                    "Handysize": 14000.0,
+                    "Supramax": 17000.0,
+                    "Panamax": 20000.0,
+                    "Capesize": 28000.0
+                }.get(vessel.class_name, 20000.0)
+                daily_fuel = {
+                    "Handysize": 22.0,
+                    "Supramax": 27.0,
+                    "Panamax": 32.0,
+                    "Capesize": 52.0
+                }.get(vessel.class_name, 30.0)
+
+                econ_inputs = VoyageCostInputs(
+                    cargo_quantity_t=float(cargo_quantity),
+                    freight_rate_usd=22.0,
+                    vessel_speed_knots=speed_knots,
+                    vessel_daily_fuel_consumption_tpd=daily_fuel,
+                    vessel_daily_hire_cost_usd=daily_hire,
+                    route_distance_nm=route_distance_nm,
+                    expected_waiting_days=expected_wait_days,
+                    port_handling_rate_tpd=origin_rate,
+                    discharge_port_handling_rate_tpd=dest_rate,
+                    load_port_cost_usd=50000.0,
+                    discharge_port_cost_usd=50000.0,
+                )
+                econ_breakdown = calculate_voyage_cost(econ_inputs)
+                actual_cost_per_tonne = econ_breakdown.cost_per_tonne
+                econ_score = max(0.0, min(100.0, 135.0 - (actual_cost_per_tonne * 1.8)))
+
             if econ_score > 70:
                 reasons.append("Strong economic efficiency.")
             elif econ_score > 0:
                 reasons.append("Moderate economic efficiency.")
-                
-            # --- Risk Score ---
-            risk_score = 80.0
-            
+
+            # --- Risk Score (Dynamic Operational Maneuverability) ---
+            risk_score = {
+                "Handysize": 85.0,  # High maneuverability, versatile shallow draft
+                "Supramax": 82.0,
+                "Panamax": 78.0,
+                "Capesize": 72.0,  # High berth draft dependency
+            }.get(vessel.class_name, 78.0)
+
             # --- Total Score ---
             if port_score == 0 or cargo_score == 0 or op_score == 0:
                 total_score = 0.0
             else:
                 total_score = (cargo_score * 0.35) + (econ_score * 0.35) + (op_score * 0.20) + (risk_score * 0.10)
-                
+
             scores.append(VesselScore(
                 vessel_class=vessel.class_name,
                 cargo_suitability_score=round(cargo_score, 1),
@@ -345,9 +390,9 @@ class VesselOptimizer:
                 total_score=round(total_score, 1),
                 reasons=" ".join(reasons)
             ))
-            
+
         scores.sort(key=lambda x: x.total_score, reverse=True)
-        
+
         # Handle case where no vessel is feasible
         if not scores or scores[0].total_score == 0:
             return VesselOptimizationResult(
@@ -356,7 +401,7 @@ class VesselOptimizer:
                 reasons="No feasible vessels found for the given requirements.",
                 alternatives=scores
             )
-            
+
         best = scores[0]
         return VesselOptimizationResult(
             recommended_vessel=best.vessel_class,
@@ -364,3 +409,7 @@ class VesselOptimizer:
             reasons=best.reasons,
             alternatives=scores[1:]
         )
+
+
+# Alias for backward compatibility
+VesselSelectionOptimizer = VesselOptimizer

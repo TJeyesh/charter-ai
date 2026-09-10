@@ -4,10 +4,22 @@ from src.optimization.decision_engine import DecisionEngine, DecisionEngineInput
 from src.optimization.port_compatibility import PortInfo
 from src.optimization.vessel_selector import VesselSpecs
 
+from src.services.freight_forecast_service import FreightForecastService
+from src.services.risk_service import RiskService
+from src.services.voyage_economics_service import VoyageEconomicsService
+from src.services.vessel_optimization_service import VesselOptimizationService
+from src.services.contract_optimization_service import ContractOptimizationService
+
 @pytest.fixture
 def decision_engine():
-    return DecisionEngine()
-    
+    return DecisionEngine(
+        forecast_service=FreightForecastService(),
+        risk_service=RiskService(),
+        economics_service=VoyageEconomicsService(),
+        vessel_service=VesselOptimizationService(),
+        contract_service=ContractOptimizationService()
+    )
+
 @pytest.fixture
 def vessel_db():
     return [
@@ -44,7 +56,7 @@ def test_successful_integration(decision_engine, valid_inputs):
     assert "contract_strategy" in result
     assert "final_recommendation" in result
     assert "explanation" in result
-    
+
     assert result["recommended_vessel"]["class"] == "Panamax"
     assert result["explanation"] is not None
     assert "recommendation_summary" in result["explanation"]
@@ -55,7 +67,7 @@ def test_graceful_failure(decision_engine, valid_inputs):
     # Overload cargo quantity so Capesize is required, but restrict port draft severely to force failure
     valid_inputs.cargo_quantity_t = 150000.0 # Requires Capesize
     valid_inputs.destination_port_info.max_draft_m = 10.0 # Capesize draft is 18.5, will fail port check if vessel selector allows it, or vessel selector will fail first
-    
+
     result = decision_engine.evaluate(valid_inputs)
     assert result["status"] == "ERROR"
     assert "No feasible vessel" in result["error_message"] or "failed" in result["error_message"]
